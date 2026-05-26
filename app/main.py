@@ -121,11 +121,8 @@ async def run_orchestrator_api(
         raise HTTPException(status_code=401, detail="Unauthorized.")
 
     workflow: ProcurementWorkflowService = app.state.workflow
-    run_payload = payload.model_copy(deep=True)
-    run_payload.prompt_mode = "weak"
-    run_payload.red_team_mode = True if payload.red_team_mode is False else payload.red_team_mode
     try:
-        return await workflow.run(run_payload)
+        return await workflow.run(payload)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

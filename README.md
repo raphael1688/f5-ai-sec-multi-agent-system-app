@@ -43,7 +43,8 @@ This app does not call the Scan API.
 - `POST /api/procurement/run`: backward-compatible alias to the same workflow.
 - `POST /api/orchestrator/run`: token-protected endpoint intended for external red-team traffic.
   - Requires header: `Authorization: Bearer <ORCHESTRATOR_API_TOKEN>`
-  - Forces `prompt_mode=weak` and enables red-team pressure by default.
+  - Uses the same workflow behavior as the main advisor endpoint.
+  - Optional request fields (`prompt_mode`, `red_team_mode`) are honored as provided.
 
 ## Prompt Library scenarios
 - `happy_path_advisory`
