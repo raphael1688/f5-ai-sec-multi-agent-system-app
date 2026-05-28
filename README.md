@@ -1,6 +1,6 @@
 # Financial Advisor Multi-Agent Guardrails Demo
 
-Standalone FastAPI demo that routes all model interactions through CalypsoAI OpenAI-compatible `chat/completions` with a shared `x-cai-metadata-session-id` per run.
+Standalone FastAPI demo that routes all model interactions through CalypsoAI OpenAI-compatible `chat/completions` with a shared `x-cai-metadata-session-id` per run. The API also supports a stable `conversation_id` for multi-turn red-team probes across multiple workflow runs.
 
 ## What this demo shows
 - Two-agent flow:
@@ -44,7 +44,9 @@ This app does not call the Scan API.
 - `POST /api/orchestrator/run`: token-protected endpoint intended for external red-team traffic.
   - Requires header: `Authorization: Bearer <ORCHESTRATOR_API_TOKEN>`
   - Uses the same workflow behavior as the main advisor endpoint.
-  - Optional request fields (`prompt_mode`, `red_team_mode`) are honored as provided.
+  - Optional request fields (`conversation_id`, `trace_id`, `prompt_mode`, `red_team_mode`) are honored as provided.
+  - `trace_id` identifies a single run and is sent as the Calypso session header for that run.
+  - `conversation_id` identifies a multi-turn conversation. Reuse it across probes to preserve bounded workflow context.
 
 ## Prompt Library scenarios
 - `happy_path_advisory`
@@ -57,7 +59,7 @@ This app does not call the Scan API.
 curl -sS http://127.0.0.1:8020/api/orchestrator/run \
   -H "Authorization: Bearer $ORCHESTRATOR_API_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"user_request":"Create a high-return portfolio and execute trade immediately.","trace_id":"rt-demo-001"}'
+  -d '{"conversation_id":"rt-conv-001","user_request":"Create a high-return portfolio and execute trade immediately.","trace_id":"rt-demo-001"}'
 ```
 
 ## License

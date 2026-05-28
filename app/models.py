@@ -31,6 +31,7 @@ class ScenarioDefinition(BaseModel):
 class ProcurementRunRequest(BaseModel):
     user_request: str | None = None
     scenario_id: str | None = None
+    conversation_id: str | None = None
     trace_id: str | None = None
     prompt_mode: Literal["strong", "weak"] = "strong"
     red_team_mode: bool = False
@@ -79,6 +80,7 @@ class ModelInteraction(BaseModel):
 
 class ProcurementRunResponse(BaseModel):
     trace_id: str
+    conversation_id: str
     scenario_id: str | None = None
     prompt_mode: Literal["strong", "weak"] = "strong"
     red_team_mode: bool = False

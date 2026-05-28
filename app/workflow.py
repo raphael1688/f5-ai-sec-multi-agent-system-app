@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+from dataclasses import dataclass, field
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Awaitable, Callable
@@ -34,6 +35,33 @@ from app.policies import PolicyEngine
 from app.prompts import POLICY_TEXT, SYSTEM_PROMPTS, tool_agent_system_prompt
 from app.scenarios import SCENARIOS, ScenarioSeed, list_scenarios
 from app.tools import ProcurementTools
+
+
+@dataclass
+class ConversationTurn:
+    trace_id: str
+    user_request: str
+    final_answer: str
+    route: str
+    recommended_product: str | None
+    guardrail_status: GuardrailStatus
+    tool_names: list[str] = field(default_factory=list)
+
+
+class ConversationMemoryStore:
+    def __init__(self, *, max_turns_per_conversation: int = 12) -> None:
+        self._max_turns_per_conversation = max_turns_per_conversation
+        self._turns_by_conversation_id: dict[str, list[ConversationTurn]] = {}
+
+    def get_recent_turns(self, conversation_id: str, *, limit: int = 6) -> list[ConversationTurn]:
+        turns = self._turns_by_conversation_id.get(conversation_id, [])
+        return list(turns[-limit:])
+
+    def append(self, conversation_id: str, turn: ConversationTurn) -> None:
+        turns = self._turns_by_conversation_id.setdefault(conversation_id, [])
+        turns.append(turn)
+        if len(turns) > self._max_turns_per_conversation:
+            del turns[: len(turns) - self._max_turns_per_conversation]
 
 
 class ProcurementWorkflowService:
@@ -75,6 +103,7 @@ class ProcurementWorkflowService:
         self.client = CalypsoChatClient()
         self.policy_engine = PolicyEngine()
         self.tools = ProcurementTools(self.policy_engine)
+        self.conversation_store = ConversationMemoryStore()
 
     def list_scenarios(self):
         return list_scenarios()
@@ -107,7 +136,9 @@ class ProcurementWorkflowService:
         indirect_injection_triggered = self._should_trigger_indirect_injection(user_request)
         signature_bypass_triggered = self._should_trigger_signature_bypass(user_request)
         workflow_markdown_triggered = self._should_trigger_workflow_markdown(user_request)
+        conversation_id = payload.conversation_id or str(uuid4())
         trace_id = payload.trace_id or str(uuid4())
+        conversation_history = self.conversation_store.get_recent_turns(conversation_id)
         progress_seq = 0
 
         async def emit_progress(event: dict[str, Any]) -> None:
@@ -118,6 +149,7 @@ class ProcurementWorkflowService:
             enriched = {
                 "sequence": progress_seq,
                 "trace_id": trace_id,
+                "conversation_id": conversation_id,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 **event,
             }
@@ -161,7 +193,9 @@ class ProcurementWorkflowService:
             generated_plan = await asyncio.to_thread(
                 self._call_orchestrator,
                 trace_id=trace_id,
+                conversation_id=conversation_id,
                 user_request=rewritten_request,
+                conversation_history=conversation_history,
                 scenario_flags=scenario_flags,
                 model_interactions=model_interactions,
             )
@@ -207,8 +241,9 @@ class ProcurementWorkflowService:
                         "message": "Out-of-scope response returned.",
                     }
                 )
-                return ProcurementRunResponse(
+                response = ProcurementRunResponse(
                     trace_id=trace_id,
+                    conversation_id=conversation_id,
                     scenario_id=effective_scenario_id,
                     prompt_mode=prompt_mode,
                     red_team_mode=red_team_mode,
@@ -223,11 +258,15 @@ class ProcurementWorkflowService:
                     mcp_activity=mcp_activity,
                     guardrail_status=self._derive_calypso_guardrail_status(model_interactions),
                 )
+                self._record_conversation_turn(conversation_id, response)
+                return response
 
             selected_tools = self._select_tools(generated_plan, user_request, scenario_flags)
             context: dict[str, Any] = {
                 "trace_id": trace_id,
+                "conversation_id": conversation_id,
                 "user_request": rewritten_request,
+                "conversation_history": self._conversation_history_payload(conversation_history),
                 "scenario_flags": scenario_flags,
                 "investment_amount_eur": 250000,
                 "risk_tolerance": "moderate",
@@ -263,8 +302,10 @@ class ProcurementWorkflowService:
                     "content": json.dumps(
                         {
                             "trace_id": trace_id,
+                            "conversation_id": conversation_id,
                             "task": "Execute approved advisory plan with tool calls.",
                             "policy": POLICY_TEXT,
+                            "conversation_history": self._conversation_history_payload(conversation_history),
                             "plan": generated_plan,
                             "request": rewritten_request,
                             "approved_actions": selected_tools,
@@ -467,7 +508,9 @@ class ProcurementWorkflowService:
             final_answer = await asyncio.to_thread(
                 self._call_final_response_agent,
                 trace_id=trace_id,
+                conversation_id=conversation_id,
                 user_request=rewritten_request,
+                conversation_history=conversation_history,
                 generated_plan=generated_plan,
                 recommendation=recommendation,
                 model_interactions=model_interactions,
@@ -490,8 +533,9 @@ class ProcurementWorkflowService:
                 }
             )
 
-            return ProcurementRunResponse(
+            response = ProcurementRunResponse(
                 trace_id=trace_id,
+                conversation_id=conversation_id,
                 scenario_id=effective_scenario_id,
                 prompt_mode=prompt_mode,
                 red_team_mode=red_team_mode,
@@ -506,6 +550,8 @@ class ProcurementWorkflowService:
                 mcp_activity=mcp_activity,
                 guardrail_status=self._derive_calypso_guardrail_status(model_interactions),
             )
+            self._record_conversation_turn(conversation_id, response)
+            return response
         except CalypsoGuardrailBlockedError as exc:
             await emit_progress(
                 {
@@ -552,8 +598,9 @@ class ProcurementWorkflowService:
                     "decision_notes": ["Blocked before downstream execution."],
                 }
 
-            return ProcurementRunResponse(
+            response = ProcurementRunResponse(
                 trace_id=trace_id,
+                conversation_id=conversation_id,
                 scenario_id=effective_scenario_id,
                 prompt_mode=prompt_mode,
                 red_team_mode=red_team_mode,
@@ -568,6 +615,8 @@ class ProcurementWorkflowService:
                 mcp_activity=mcp_activity,
                 guardrail_status="blocked",
             )
+            self._record_conversation_turn(conversation_id, response)
+            return response
 
     async def run_scenario(self, scenario_id: str, override_request: str | None = None) -> ScenarioRunResponse:
         seed = self._resolve_scenario(scenario_id)
@@ -586,11 +635,48 @@ class ProcurementWorkflowService:
             result=result,
         )
 
+    def _record_conversation_turn(self, conversation_id: str, response: ProcurementRunResponse) -> None:
+        tool_names: list[str] = []
+        for call in response.tool_calls:
+            name = str(call.get("tool_name") or "")
+            if name and name not in tool_names:
+                tool_names.append(name)
+
+        self.conversation_store.append(
+            conversation_id,
+            ConversationTurn(
+                trace_id=response.trace_id,
+                user_request=response.user_request,
+                final_answer=response.final_answer,
+                route=str(response.generated_plan.get("route") or "unknown"),
+                recommended_product=response.recommendation.get("recommended_product"),
+                guardrail_status=response.guardrail_status,
+                tool_names=tool_names,
+            ),
+        )
+
+    @staticmethod
+    def _conversation_history_payload(turns: list[ConversationTurn]) -> list[dict[str, Any]]:
+        return [
+            {
+                "trace_id": turn.trace_id,
+                "user_request": turn.user_request,
+                "final_answer": turn.final_answer,
+                "route": turn.route,
+                "recommended_product": turn.recommended_product,
+                "guardrail_status": turn.guardrail_status,
+                "tool_names": turn.tool_names,
+            }
+            for turn in turns
+        ]
+
     def _call_orchestrator(
         self,
         *,
         trace_id: str,
+        conversation_id: str,
         user_request: str,
+        conversation_history: list[ConversationTurn],
         scenario_flags: dict[str, bool],
         model_interactions: list[ModelInteraction],
     ) -> dict[str, Any]:
@@ -616,7 +702,9 @@ class ProcurementWorkflowService:
                 "content": json.dumps(
                     {
                         "trace_id": trace_id,
+                        "conversation_id": conversation_id,
                         "request": user_request,
+                        "conversation_history": self._conversation_history_payload(conversation_history),
                         "scenario_flags": scenario_flags,
                         "available_tools": available_tools,
                         "policy": POLICY_TEXT,
@@ -811,7 +899,9 @@ class ProcurementWorkflowService:
         self,
         *,
         trace_id: str,
+        conversation_id: str,
         user_request: str,
+        conversation_history: list[ConversationTurn],
         generated_plan: dict[str, Any],
         recommendation: dict[str, Any],
         model_interactions: list[ModelInteraction],
@@ -828,7 +918,9 @@ class ProcurementWorkflowService:
                 "content": json.dumps(
                     {
                         "trace_id": trace_id,
+                        "conversation_id": conversation_id,
                         "request": user_request,
+                        "conversation_history": self._conversation_history_payload(conversation_history),
                         "plan_summary": generated_plan.get("plan_summary"),
                         "recommendation_payload": recommendation,
                     },

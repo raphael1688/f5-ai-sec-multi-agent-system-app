@@ -24,6 +24,7 @@
     runtimeTriggeredToolNodeIds: new Set(),
     showGuardrailOverlay: true,
     topologyZoom: 1,
+    conversationId: null,
   };
 
   const TOPOLOGY_VIEW_WIDTH = 1500;
@@ -825,6 +826,7 @@
   }
 
   function renderTopology(result) {
+    state.conversationId = result.conversation_id || state.conversationId;
     state.topology = buildStoryTopology(result);
     state.runtimeNodeId = null;
     state.runtimeToolNodeId = null;
@@ -932,10 +934,15 @@
   }
 
   async function streamAdvisorRun(userRequest, onEvent) {
+    const payload = { user_request: userRequest };
+    if (state.conversationId) {
+      payload.conversation_id = state.conversationId;
+    }
+
     const response = await fetch("/api/advisor/run/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_request: userRequest }),
+      body: JSON.stringify(payload),
     });
 
     if (!response.ok) {
@@ -1050,7 +1057,10 @@
         pendingBubble.textContent = "Running advisor workflow...\nLive stream unavailable, falling back to standard run.";
         body = await api("/api/advisor/run", {
           method: "POST",
-          body: JSON.stringify({ user_request: userRequest }),
+          body: JSON.stringify({
+            user_request: userRequest,
+            ...(state.conversationId ? { conversation_id: state.conversationId } : {}),
+          }),
         });
       }
 
@@ -1144,6 +1154,7 @@
       stream.appendChild(empty);
     }
     renderGuardrailStatus("unknown");
+    state.conversationId = null;
     el("traceId").textContent = "-";
     hideNodePopover();
   }
