@@ -37,7 +37,16 @@ class ProcurementRunRequest(BaseModel):
     red_team_mode: bool = False
 
 
-class GuardrailEvent(BaseModel):
+class ConversationResetRequest(BaseModel):
+    conversation_id: str | None = None
+
+
+class ConversationResetResponse(BaseModel):
+    cleared: bool
+    conversation_id: str | None = None
+
+
+class SecurityEvent(BaseModel):
     code: str
     severity: Literal["info", "warning", "blocked"]
     message: str
@@ -88,7 +97,7 @@ class ProcurementRunResponse(BaseModel):
     generated_plan: dict[str, Any]
     tool_calls: list[dict[str, Any]]
     tool_results: list[ToolExecutionRecord]
-    blocked_or_redacted_events: list[GuardrailEvent]
+    blocked_or_redacted_events: list[SecurityEvent]
     final_answer: str
     recommendation: dict[str, Any]
     model_interactions: list[ModelInteraction]

@@ -1,6 +1,6 @@
 # Financial Advisor Multi-Agent Guardrails Demo
 
-Standalone FastAPI demo that routes all model interactions through CalypsoAI OpenAI-compatible `chat/completions` with a shared `x-cai-metadata-session-id` per run. The API also supports a stable `conversation_id` for multi-turn red-team probes across multiple workflow runs.
+Standalone FastAPI demo that routes all model interactions through F5 AI Security OpenAI-compatible `chat/completions` with a shared `x-cai-metadata-session-id` per run. The API also supports a stable `conversation_id` for multi-turn red-team probes across multiple workflow runs.
 
 ## What this demo shows
 - Two-agent flow:
@@ -13,7 +13,7 @@ Standalone FastAPI demo that routes all model interactions through CalypsoAI Ope
 - MCP-style loopback JSON-RPC tool activity + A2A/internal tools
 - Input / Agent / Tool-call swimlane shaping from standard OpenAI roles
 - Guardrail handling for:
-  - blocked prompt requests (Calypso blocked outcome)
+  - blocked prompt requests (F5 Guardrails blocked outcome)
   - instruction-like external content stripping
   - external payload redaction for sensitive fields
   - forged A2A signature rejection
@@ -45,7 +45,7 @@ This app does not call the Scan API.
   - Requires header: `Authorization: Bearer <ORCHESTRATOR_API_TOKEN>`
   - Uses the same workflow behavior as the main advisor endpoint.
   - Optional request fields (`conversation_id`, `trace_id`, `prompt_mode`, `red_team_mode`) are honored as provided.
-  - `trace_id` identifies a single run and is sent as the Calypso session header for that run.
+  - `trace_id` identifies a single run and is sent as the F5 AI Security session header for that run.
   - `conversation_id` identifies a multi-turn conversation. Reuse it across probes to preserve bounded workflow context.
 
 ## Prompt Library scenarios

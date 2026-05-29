@@ -17,7 +17,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Financial Advisor Multi-Agent Demo</title>
-    <link rel="stylesheet" href="/ui-static/styles.css?v=20260518b" />
+    <link rel="stylesheet" href="/ui-static/styles.css?v=20260529g" />
   </head>
   <body>
     <div class="bg-shape shape-a"></div>
@@ -25,9 +25,14 @@
 
     <main class="layout">
       <header class="hero">
-        <p class="hero-kicker">Live Multi-Agent Workflow</p>
-        <h1>Financial Advisor Multi-Agent Demo</h1>
-        <p class="hero-subtitle">Trace how agents coordinate, call tools, and return advisory outcomes through one shared session id.</p>
+        <div>
+          <h1>Multi-Agent System</h1>
+          <p class="hero-subtitle">Watch requests move through F5 AI Security, agents, tools, and response synthesis in real time.</p>
+        </div>
+        <div class="hero-status">
+          <span class="live-dot" aria-hidden="true"></span>
+          <span>Live Run</span>
+        </div>
       </header>
 
       <div class="workspace">
@@ -35,23 +40,13 @@
           <div class="panel-head">
             <div>
               <h2>Advisor Assistant</h2>
-              <p class="panel-subtitle">Prompt/response flow with one trace id per run.</p>
-            </div>
-            <div class="trace-meta">
-              <div class="trace-chip">
-                <span>Trace</span>
-                <code id="traceId">-</code>
-              </div>
-              <div id="guardrailStatus" class="guardrail-status status-unknown">
-                <span class="dot" aria-hidden="true"></span>
-                <span id="guardrailStatusText">unknown</span>
-              </div>
+              <p class="panel-subtitle">Prompt and response rail.</p>
             </div>
           </div>
 
           <div class="tab-nav" role="tablist" aria-label="Assistant tabs">
             <button id="tabChatBtn" class="tab-btn active" type="button" data-tab="chat" role="tab">Chat</button>
-            <button id="tabPromptsBtn" class="tab-btn" type="button" data-tab="prompts" role="tab">Prompt Library</button>
+            <button id="tabPromptsBtn" class="tab-btn" type="button" data-tab="prompts" role="tab">Prompts</button>
           </div>
 
           <div id="chatTab" class="tab-panel active" role="tabpanel">
@@ -65,14 +60,14 @@
               <label for="customRequest">Message</label>
               <textarea id="customRequest" rows="4">Build an investment recommendation for a client with EUR 250000 and moderate risk tolerance. Compare product options, run risk checks, review disclosures, and prepare a draft recommendation.</textarea>
               <div class="row">
-                <button id="runCustomBtn">Send Request</button>
-                <button id="clearChatBtn" class="secondary" type="button">Clear Chat</button>
+                <button id="runCustomBtn">Send</button>
+                <button id="clearChatBtn" class="secondary" type="button">New Conversation</button>
               </div>
             </div>
           </div>
 
           <div id="promptsTab" class="tab-panel" role="tabpanel">
-            <p class="panel-subtitle">Optional canned prompts for copy/paste during demos.</p>
+            <p class="panel-subtitle">Canned prompts for demos.</p>
             <div id="promptLibrary" class="prompt-library"></div>
           </div>
         </section>
@@ -80,23 +75,35 @@
         <aside class="panel topology-panel">
           <div class="panel-head">
             <div>
-              <h2>MAS Architecture</h2>
-              <p class="panel-subtitle">A clear run-path from user prompt to final advisory response.</p>
+              <h2>System Flow</h2>
+              <p class="panel-subtitle">Real-time visualization of agent orchestration and tool execution.</p>
+            </div>
+            <div class="trace-meta">
+              <div class="trace-chip">
+                <span>Trace</span>
+                <code id="traceId">-</code>
+              </div>
+              <div id="guardrailStatus" class="guardrail-status status-unknown">
+                <span class="dot" aria-hidden="true"></span>
+                <span id="guardrailStatusText">unknown</span>
+              </div>
             </div>
           </div>
 
+          <section class="run-progress" id="runProgress" aria-label="Run progress"></section>
+
           <div class="topology-controls" aria-label="Topology zoom controls">
             <button id="zoomOutBtn" class="secondary icon-btn" type="button" aria-label="Zoom out">−</button>
-            <span id="topologyZoomLabel" class="zoom-label">100%</span>
+            <span id="topologyZoomLabel" class="zoom-label">80%</span>
             <button id="zoomInBtn" class="secondary icon-btn" type="button" aria-label="Zoom in">+</button>
             <button id="zoomResetBtn" class="secondary" type="button">Reset</button>
-            <button id="toggleGuardrailCallsBtn" class="secondary" type="button">Hide Guardrail Calls</button>
+            <button id="toggleGuardrailCallsBtn" class="secondary" type="button">Show Guardrail Calls</button>
           </div>
 
           <section class="topology-stage" id="topologyStage">
             <div id="topologyCanvas" class="topology-canvas">
               <div id="topologyScene" class="topology-scene">
-                <svg id="topologySvg" viewBox="0 0 1000 700" preserveAspectRatio="none" aria-hidden="true">
+                <svg id="topologySvg" viewBox="0 0 1500 760" preserveAspectRatio="none" aria-hidden="true">
                   <defs>
                     <marker id="arrowHead" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto">
                       <path d="M0,0 L10,4 L0,8 z" fill="#4b8677"></path>
@@ -116,7 +123,7 @@
 
           <div class="topology-grid">
             <article>
-              <h3>Execution Path</h3>
+              <h3>Execution Log</h3>
               <ol id="flowSteps" class="flow-steps"></ol>
             </article>
           </div>
@@ -124,6 +131,6 @@
         </div>
     </main>
 
-    <script src="/ui-static/app.js?v=20260526a"></script>
+    <script src="/ui-static/app.js?v=20260529g"></script>
   </body>
 </html>

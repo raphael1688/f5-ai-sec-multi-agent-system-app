@@ -22,16 +22,28 @@
     runtimeToolNodeId: null,
     runtimeLlmNodeId: null,
     runtimeTriggeredToolNodeIds: new Set(),
-    showGuardrailOverlay: true,
-    topologyZoom: 1,
+    showGuardrailOverlay: false,
+    topologyZoom: 0.8,
     conversationId: null,
+    runProgressIndex: -1,
+    runProgressStatus: "idle",
+    guardrailBlockedNodeIds: new Set(),
   };
 
   const TOPOLOGY_VIEW_WIDTH = 1500;
-  const TOPOLOGY_VIEW_HEIGHT = 700;
+  const TOPOLOGY_VIEW_HEIGHT = 760;
+  const TOPOLOGY_ZOOM_DEFAULT = 0.8;
   const TOPOLOGY_ZOOM_MIN = 0.65;
   const TOPOLOGY_ZOOM_MAX = 1.75;
   const TOPOLOGY_ZOOM_STEP = 0.1;
+
+  const RUN_STAGES = [
+    { id: "user_input", label: "User Request", idle: "Waiting", active: "Received", complete: "Received" },
+    { id: "orchestrator", label: "Orchestrator", idle: "Waiting", active: "Routing", complete: "Routed" },
+    { id: "tool_agent", label: "Agent Execution", idle: "Waiting", active: "In Progress", complete: "Complete" },
+    { id: "tool_layer", label: "Tool Calls", idle: "Waiting", active: "Executing", complete: "Complete" },
+    { id: "final_output", label: "Response", idle: "Waiting", active: "Synthesizing", complete: "Complete" },
+  ];
 
   const TOOL_COMPONENTS = [
     {
@@ -102,6 +114,43 @@
     const normalized = normalizeGuardrailStatus(status);
     container.className = `guardrail-status status-${normalized}`;
     textEl.textContent = normalized;
+  }
+
+  function componentForAgentName(agentName) {
+    const mapping = {
+      advisor_orchestrator: "orchestrator",
+      advisor_tool_agent: "tool_agent",
+      advisor_final_response_agent: "final_agent",
+    };
+    return mapping[String(agentName || "").trim()] || "";
+  }
+
+  function componentForGuardrailBlock(payload) {
+    if (!payload || typeof payload !== "object") return "";
+
+    const directAgent = componentForAgentName(payload.agent_name || payload.blocked_at_agent);
+    if (directAgent) return directAgent;
+
+    const recommendation = payload.recommendation || {};
+    const recommendationAgent = componentForAgentName(recommendation.blocked_at_agent);
+    if (recommendationAgent) return recommendationAgent;
+
+    const events = Array.isArray(payload.blocked_or_redacted_events)
+      ? payload.blocked_or_redacted_events
+      : [];
+    for (const event of events) {
+      const details = event && typeof event === "object" ? event.details || {} : {};
+      const eventAgent = componentForAgentName(details.blocked_at_agent);
+      if (eventAgent) return eventAgent;
+    }
+    return "";
+  }
+
+  function markGuardrailBlockedComponent(componentId) {
+    const target = String(componentId || "").trim();
+    if (!target) return;
+    state.guardrailBlockedNodeIds.add(target);
+    state.selectedNodeId = target;
   }
 
   function stripGuardrailSection(text) {
@@ -317,7 +366,7 @@
         "Synthesizes validated context into the final advisory narrative for the client-facing response.",
       final_output:
         "Customer-visible answer returned to UI/API, including recommendation, required approvals, and actions taken.",
-      calypso_guardrails:
+      f5_guardrails:
         "All LLM turns route through F5 AI Guardrails via OpenAI-compatible /chat/completions with the shared trace_id in x-cai-metadata-session-id for enforcement and traceability.",
     };
 
@@ -327,8 +376,8 @@
         label: "User Input",
         icon: "user",
         kind: "input",
-        x: 320,
-        y: 84,
+        x: 150,
+        y: 120,
         active: true,
         meta: {
           role_summary: roleSummary.user_input,
@@ -341,8 +390,8 @@
         label: "Orchestrator",
         icon: "orchestrator",
         kind: "agent",
-        x: 320,
-        y: 190,
+        x: 455,
+        y: 120,
         active: true,
         meta: {
           role_summary: roleSummary.orchestrator,
@@ -357,8 +406,8 @@
         label: "Advisor Tool Agent",
         icon: "agent",
         kind: "agent",
-        x: 240,
-        y: 332,
+        x: 455,
+        y: 300,
         active: hasToolPhase,
         meta: {
           role_summary: roleSummary.tool_agent,
@@ -372,8 +421,8 @@
         label: "Tool Layer",
         icon: "tool",
         kind: "tool",
-        x: 560,
-        y: 286,
+        x: 760,
+        y: 300,
         active: hasToolPhase,
         meta: {
           role_summary: roleSummary.tool_layer,
@@ -390,8 +439,8 @@
         label: "Workflow Memory",
         icon: "memory",
         kind: "memory",
-        x: 560,
-        y: 456,
+        x: 760,
+        y: 535,
         active: true,
         meta: {
           role_summary: roleSummary.workflow_memory,
@@ -401,16 +450,16 @@
         },
       },
       {
-        id: "calypso_guardrails",
+        id: "f5_guardrails",
         label: "F5 AI Guardrails",
         icon: "guardrail",
         kind: "guardrail",
-        x: 560,
-        y: 92,
+        x: 760,
+        y: 120,
         active: true,
         guardrailOverlay: true,
         meta: {
-          role_summary: roleSummary.calypso_guardrails,
+          role_summary: roleSummary.f5_guardrails,
           total_llm_calls: interactions.length,
           orchestrator_calls: orchestratorCallCount,
           tool_agent_calls: toolAgentCallCount,
@@ -422,8 +471,8 @@
         label: "Final Response Agent",
         icon: "final_agent",
         kind: "agent",
-        x: 320,
-        y: 548,
+        x: 455,
+        y: 650,
         active: hasFinalAgentTurn,
         meta: {
           role_summary: roleSummary.final_agent,
@@ -436,8 +485,8 @@
         label: "Final Response",
         icon: "output",
         kind: "output",
-        x: 320,
-        y: 646,
+        x: 150,
+        y: 650,
         active: true,
         meta: {
           role_summary: roleSummary.final_output,
@@ -449,8 +498,8 @@
     const toolChildNodes = TOOL_COMPONENTS.map((tool, index) => {
       const col = index % 2;
       const row = Math.floor(index / 2);
-      const x = col === 0 ? 760 : 940;
-      const y = 256 + row * 92;
+      const x = col === 0 ? 1070 : 1290;
+      const y = 185 + row * 105;
       const callCount = Number(callCountByTool[tool.name] || 0);
       return {
         id: `tool_component_${tool.name}`,
@@ -465,6 +514,7 @@
           tool_name: tool.name,
           call_count: callCount,
           invoked: callCount > 0,
+          count_badge: callCount > 0 ? `x${callCount}` : "",
         },
       };
     });
@@ -474,19 +524,18 @@
     const edges = [
       { id: "e1", source: "user_input", target: "orchestrator", label: "request", active: true },
       { id: "e2", source: "orchestrator", target: "tool_agent", label: "plan", active: hasToolPhase },
-      { id: "e3", source: "orchestrator", target: "tool_layer", label: "plan", active: hasToolPhase },
       { id: "e4", source: "tool_agent", target: "tool_layer", label: "execute", active: hasToolPhase },
       {
         id: "e5",
         source: "tool_layer",
         target: "tool_agent",
-        label: "results",
+        label: "",
         active: hasToolPhase,
         secondary: true,
       },
       {
         id: "e6",
-        source: "tool_agent",
+        source: "tool_layer",
         target: "workflow_memory",
         label: "write",
         active: hasFinalAgentTurn,
@@ -495,7 +544,7 @@
         id: "e7",
         source: "orchestrator",
         target: "workflow_memory",
-        label: "state",
+        label: "",
         active: true,
         secondary: true,
       },
@@ -524,7 +573,7 @@
       {
         id: "e_guardrail_orchestrator",
         source: "orchestrator",
-        target: "calypso_guardrails",
+        target: "f5_guardrails",
         label: orchestratorCallCount > 0 ? `llm x${orchestratorCallCount}` : "",
         active: orchestratorCallCount > 0,
         secondary: true,
@@ -533,7 +582,7 @@
       {
         id: "e_guardrail_tool_agent",
         source: "tool_agent",
-        target: "calypso_guardrails",
+        target: "f5_guardrails",
         label: toolAgentCallCount > 0 ? `llm x${toolAgentCallCount}` : "",
         active: toolAgentCallCount > 0,
         secondary: true,
@@ -542,7 +591,7 @@
       {
         id: "e_guardrail_final_agent",
         source: "final_agent",
-        target: "calypso_guardrails",
+        target: "f5_guardrails",
         label: finalAgentCallCount > 0 ? `llm x${finalAgentCallCount}` : "",
         active: finalAgentCallCount > 0,
         secondary: true,
@@ -555,7 +604,7 @@
         id: `e_tool_${index + 1}`,
         source: "tool_layer",
         target: node.id,
-        label: callCount > 0 ? `x${callCount}` : "",
+        label: "",
         active: hasToolPhase && callCount > 0,
         secondary: true,
       });
@@ -638,26 +687,75 @@
       .filter(Boolean)
       .join(" ");
     line.setAttribute("class", className);
-    line.setAttribute("d", `M ${source.x} ${source.y} L ${target.x} ${target.y}`);
+    const path = edge.guardrailOverlay
+      ? curvedPath(source, target, edge.secondary ? -44 : 44)
+      : elbowPath(source, target);
+    line.setAttribute("d", path);
     svg.appendChild(line);
 
-    const midX = (source.x + target.x) / 2;
-    const midY = (source.y + target.y) / 2;
+    const midX = edge.guardrailOverlay
+      ? (source.x + target.x) / 2
+      : edgeLabelPoint(source, target).x;
+    const midY = edge.guardrailOverlay
+      ? (source.y + target.y) / 2
+      : edgeLabelPoint(source, target).y;
     const dx = target.x - source.x;
     const dy = target.y - source.y;
     const len = Math.max(Math.sqrt(dx * dx + dy * dy), 1);
     const nx = -dy / len;
     const ny = dx / len;
-    const edgeOffset = edge.secondary ? -8 : 9;
+    const edgeOffset = edge.secondary ? -14 : 14;
     if (edge.label) {
+      const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      group.setAttribute("class", "topology-edge-label-group");
+      const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      const labelWidth = Math.max(34, edge.label.length * 8 + 18);
+      const labelX = midX + nx * edgeOffset;
+      const labelY = midY + ny * edgeOffset;
+      rect.setAttribute("class", "topology-edge-label-bg");
+      rect.setAttribute("x", String(labelX - labelWidth / 2));
+      rect.setAttribute("y", String(labelY - 14));
+      rect.setAttribute("width", String(labelWidth));
+      rect.setAttribute("height", "24");
+      rect.setAttribute("rx", "12");
       const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
       label.setAttribute("class", "topology-edge-label");
-      label.setAttribute("x", String(midX + nx * edgeOffset));
-      label.setAttribute("y", String(midY + ny * edgeOffset));
+      label.setAttribute("x", String(labelX));
+      label.setAttribute("y", String(labelY + 4));
       label.setAttribute("text-anchor", "middle");
       label.textContent = edge.label;
-      svg.appendChild(label);
+      group.appendChild(rect);
+      group.appendChild(label);
+      svg.appendChild(group);
     }
+  }
+
+  function elbowPath(source, target) {
+    const dx = Math.abs(target.x - source.x);
+    const dy = Math.abs(target.y - source.y);
+    if (dx < 28 || dy < 28) {
+      return `M ${source.x} ${source.y} L ${target.x} ${target.y}`;
+    }
+    const midX = (source.x + target.x) / 2;
+    return `M ${source.x} ${source.y} L ${midX} ${source.y} L ${midX} ${target.y} L ${target.x} ${target.y}`;
+  }
+
+  function curvedPath(source, target, offset) {
+    const midX = (source.x + target.x) / 2;
+    const midY = (source.y + target.y) / 2 + offset;
+    return `M ${source.x} ${source.y} Q ${midX} ${midY} ${target.x} ${target.y}`;
+  }
+
+  function edgeLabelPoint(source, target) {
+    const dx = Math.abs(target.x - source.x);
+    const dy = Math.abs(target.y - source.y);
+    if (dx < 28 || dy < 28) {
+      return { x: (source.x + target.x) / 2, y: (source.y + target.y) / 2 };
+    }
+    const midX = (source.x + target.x) / 2;
+    return dx >= dy
+      ? { x: midX, y: source.y }
+      : { x: midX, y: (source.y + target.y) / 2 };
   }
 
   function drawTopology() {
@@ -669,7 +767,7 @@
     if (!svg || !nodeLayer) return;
     svg.setAttribute("viewBox", `0 0 ${TOPOLOGY_VIEW_WIDTH} ${TOPOLOGY_VIEW_HEIGHT}`);
 
-    svg.querySelectorAll(".topology-edge, .topology-edge-label").forEach((item) => item.remove());
+    svg.querySelectorAll(".topology-edge, .topology-edge-label-group").forEach((item) => item.remove());
     nodeLayer.innerHTML = "";
 
     const visibleNodes = topology.nodes.filter((node) => state.showGuardrailOverlay || !node.guardrailOverlay);
@@ -697,6 +795,7 @@
         node.kind === "tool-child" && state.runtimeTriggeredToolNodeIds.has(node.id) ? "is-triggered-live" : "",
         state.runtimeNodeId === node.id || state.runtimeToolNodeId === node.id ? "working" : "",
         state.runtimeLlmNodeId === node.id ? "llm-active" : "",
+        state.guardrailBlockedNodeIds.has(node.id) ? "guardrail-blocked" : "",
         state.selectedNodeId === node.id ? "selected" : "",
       ]
         .filter(Boolean)
@@ -706,27 +805,32 @@
       button.innerHTML = `
         <span class="topology-node-icon">${iconMarkup(node.icon)}</span>
         <span class="topology-node-label">${node.label}</span>
+        ${node.meta?.count_badge ? `<span class="topology-node-badge">${node.meta.count_badge}</span>` : ""}
+        ${state.guardrailBlockedNodeIds.has(node.id) ? '<span class="topology-guardrail-shield" title="F5 Guardrails blocked here">!</span>' : ""}
       `;
       button.addEventListener("click", () => selectNode(node.id));
       nodeLayer.appendChild(button);
     });
   }
 
-  function applyTopologyZoom(nextZoom, keepCenter = true) {
+  function applyTopologyZoom(nextZoom, keepCenter = true, focalPoint = null) {
     const stage = el("topologyStage");
     const canvas = el("topologyCanvas");
     const scene = el("topologyScene");
     const label = el("topologyZoomLabel");
     if (!stage || !canvas || !scene) return;
 
-    const clamped = Math.max(TOPOLOGY_ZOOM_MIN, Math.min(TOPOLOGY_ZOOM_MAX, Number(nextZoom) || 1));
-    const prev = state.topologyZoom || 1;
+    const fallbackZoom = state.topologyZoom || TOPOLOGY_ZOOM_DEFAULT;
+    const clamped = Math.max(TOPOLOGY_ZOOM_MIN, Math.min(TOPOLOGY_ZOOM_MAX, Number(nextZoom) || fallbackZoom));
+    const prev = state.topologyZoom || TOPOLOGY_ZOOM_DEFAULT;
 
     let worldX = 0;
     let worldY = 0;
     if (keepCenter) {
-      worldX = (stage.scrollLeft + stage.clientWidth / 2) / prev;
-      worldY = (stage.scrollTop + stage.clientHeight / 2) / prev;
+      const viewportX = focalPoint?.x ?? stage.clientWidth / 2;
+      const viewportY = focalPoint?.y ?? stage.clientHeight / 2;
+      worldX = (stage.scrollLeft + viewportX) / prev;
+      worldY = (stage.scrollTop + viewportY) / prev;
     }
 
     state.topologyZoom = clamped;
@@ -739,8 +843,10 @@
     }
 
     if (keepCenter) {
-      const nextLeft = worldX * clamped - stage.clientWidth / 2;
-      const nextTop = worldY * clamped - stage.clientHeight / 2;
+      const viewportX = focalPoint?.x ?? stage.clientWidth / 2;
+      const viewportY = focalPoint?.y ?? stage.clientHeight / 2;
+      const nextLeft = worldX * clamped - viewportX;
+      const nextTop = worldY * clamped - viewportY;
       stage.scrollLeft = Math.max(0, nextLeft);
       stage.scrollTop = Math.max(0, nextTop);
     }
@@ -749,6 +855,43 @@
       const node = nodeById(state.topology.nodes, state.popoverNodeId);
       if (node) showNodePopover(node);
     }
+  }
+
+  function bindTopologyPinchZoom() {
+    const stage = el("topologyStage");
+    if (!stage) return;
+
+    stage.addEventListener(
+      "wheel",
+      (event) => {
+        if (!event.ctrlKey && !event.metaKey) return;
+        event.preventDefault();
+
+        const bounds = stage.getBoundingClientRect();
+        const focalPoint = {
+          x: event.clientX - bounds.left,
+          y: event.clientY - bounds.top,
+        };
+        const direction = event.deltaY > 0 ? -1 : 1;
+        const scaleStep = Math.abs(event.deltaY) > 80 ? 0.08 : 0.045;
+        applyTopologyZoom(state.topologyZoom + direction * scaleStep, true, focalPoint);
+      },
+      { passive: false },
+    );
+
+    let gestureStartZoom = state.topologyZoom || TOPOLOGY_ZOOM_DEFAULT;
+    stage.addEventListener("gesturestart", (event) => {
+      event.preventDefault();
+      gestureStartZoom = state.topologyZoom || TOPOLOGY_ZOOM_DEFAULT;
+    });
+    stage.addEventListener("gesturechange", (event) => {
+      event.preventDefault();
+      const bounds = stage.getBoundingClientRect();
+      applyTopologyZoom(gestureStartZoom * event.scale, true, {
+        x: event.clientX - bounds.left,
+        y: event.clientY - bounds.top,
+      });
+    });
   }
 
   function renderSteps() {
@@ -763,6 +906,58 @@
       li.addEventListener("click", () => selectNode(step.nodeId));
       list.appendChild(li);
     });
+  }
+
+  function renderRunProgress() {
+    const container = el("runProgress");
+    if (!container) return;
+    container.innerHTML = "";
+    RUN_STAGES.forEach((stage, index) => {
+      let status = "pending";
+      let statusText = stage.idle;
+      if (state.runProgressStatus === "complete") {
+        status = "complete";
+        statusText = stage.complete;
+      } else if (state.runProgressStatus === "blocked") {
+        status = index <= state.runProgressIndex ? "blocked" : "pending";
+        statusText = index <= state.runProgressIndex ? "Blocked" : stage.idle;
+      } else if (index < state.runProgressIndex) {
+        status = "complete";
+        statusText = stage.complete;
+      } else if (index === state.runProgressIndex) {
+        status = "active";
+        statusText = stage.active;
+      }
+
+      const item = document.createElement("div");
+      item.className = `run-progress-item status-${status}`;
+      item.innerHTML = `
+        <span class="run-progress-index">${index + 1}</span>
+        <span class="run-progress-copy">
+          <span class="run-progress-label">${stage.label}</span>
+          <span class="run-progress-status">${statusText}</span>
+        </span>
+      `;
+      container.appendChild(item);
+    });
+  }
+
+  function setRunProgress(componentId, status = "running") {
+    const component = String(componentId || "");
+    const indexByComponent = {
+      user_input: 0,
+      orchestrator: 1,
+      tool_agent: 2,
+      tool_layer: 3,
+      workflow_memory: 3,
+      final_agent: 4,
+      final_output: 4,
+    };
+    state.runProgressIndex = Number.isInteger(indexByComponent[component])
+      ? indexByComponent[component]
+      : state.runProgressIndex;
+    state.runProgressStatus = status;
+    renderRunProgress();
   }
 
   function selectNode(nodeId) {
@@ -832,11 +1027,19 @@
     state.runtimeToolNodeId = null;
     state.runtimeLlmNodeId = null;
     state.runtimeTriggeredToolNodeIds = new Set();
+    state.guardrailBlockedNodeIds = new Set();
     state.selectedNodeId = null;
+    const guardrailBlockedComponent = componentForGuardrailBlock(result);
+    if (normalizeGuardrailStatus(result.guardrail_status) === "blocked" && guardrailBlockedComponent) {
+      markGuardrailBlockedComponent(guardrailBlockedComponent);
+    }
     el("traceId").textContent = result.trace_id || "-";
     renderGuardrailStatus(result.guardrail_status || "unknown");
+    state.runProgressIndex = 4;
+    state.runProgressStatus = normalizeGuardrailStatus(result.guardrail_status) === "blocked" ? "blocked" : "complete";
     drawTopology();
     renderSteps();
+    renderRunProgress();
     hideNodePopover();
     updateGuardrailToggleButton();
   }
@@ -847,11 +1050,15 @@
     state.runtimeToolNodeId = null;
     state.runtimeLlmNodeId = null;
     state.runtimeTriggeredToolNodeIds = new Set();
+    state.guardrailBlockedNodeIds = new Set();
     state.selectedNodeId = null;
+    state.runProgressIndex = -1;
+    state.runProgressStatus = "idle";
     el("traceId").textContent = "-";
     renderGuardrailStatus("unknown");
     drawTopology();
     renderSteps();
+    renderRunProgress();
     hideNodePopover();
     updateGuardrailToggleButton();
   }
@@ -885,7 +1092,9 @@
       renderInitialTopology();
     }
     state.runtimeTriggeredToolNodeIds = new Set();
+    state.guardrailBlockedNodeIds = new Set();
     buildRuntimeExecutionSteps(userRequest);
+    setRunProgress("user_input", "running");
     activateRuntimeNode("user_input");
     pendingBubble.textContent = "Running advisor workflow...\nRequest accepted by the workflow service.";
   }
@@ -899,8 +1108,13 @@
     const eventStatus = String(progressEvent.status || "").trim();
     const eventMessage = String(progressEvent.message || "").trim();
 
+    if (eventStatus === "blocked") {
+      markGuardrailBlockedComponent(componentForGuardrailBlock(progressEvent) || componentId);
+    }
+
     if (componentId) {
       state.runtimeNodeId = componentId;
+      setRunProgress(componentId, eventStatus === "blocked" ? "blocked" : "running");
     }
 
     if (eventKind === "tool_call" && eventStatus === "started" && toolComponentId) {
@@ -923,6 +1137,7 @@
     if (componentId === "final_output" && eventStatus === "completed") {
       state.runtimeToolNodeId = null;
       state.runtimeLlmNodeId = null;
+      setRunProgress("final_output", "complete");
     }
 
     drawTopology();
@@ -933,8 +1148,8 @@
     }
   }
 
-  async function streamAdvisorRun(userRequest, onEvent) {
-    const payload = { user_request: userRequest };
+  async function streamAdvisorRun(userRequest, onEvent, options = {}) {
+    const payload = { user_request: userRequest, ...options };
     if (state.conversationId) {
       payload.conversation_id = state.conversationId;
     }
@@ -1035,11 +1250,10 @@
     }
   }
 
-  async function runCustom() {
-    const userRequest = el("customRequest").value.trim();
+  async function runAdvisorRequest({ userRequest, metaText = "user • custom", options = {} }) {
     if (!userRequest) return;
 
-    addMessage("user", userRequest, "user • custom");
+    addMessage("user", userRequest, metaText);
     const pendingBubble = addMessage("assistant", "Running advisor workflow...", "assistant • pending");
     pendingBubble.classList.add("pending");
     renderGuardrailStatus("unknown");
@@ -1052,13 +1266,14 @@
           if (eventName === "progress") {
             applyProgressEvent(payload, pendingBubble);
           }
-        });
+        }, options);
       } catch (streamError) {
         pendingBubble.textContent = "Running advisor workflow...\nLive stream unavailable, falling back to standard run.";
         body = await api("/api/advisor/run", {
           method: "POST",
           body: JSON.stringify({
             user_request: userRequest,
+            ...options,
             ...(state.conversationId ? { conversation_id: state.conversationId } : {}),
           }),
         });
@@ -1071,6 +1286,11 @@
     } finally {
       stopRuntimeActivity();
     }
+  }
+
+  async function runCustom() {
+    const userRequest = el("customRequest").value.trim();
+    await runAdvisorRequest({ userRequest });
   }
 
   async function loadScenarios() {
@@ -1094,6 +1314,7 @@
       const promptText = document.createElement("div");
       promptText.className = "prompt-text";
       promptText.textContent = scenario.user_request || "";
+      let promptOption = null;
 
       const actions = document.createElement("div");
       actions.className = "prompt-actions";
@@ -1125,12 +1346,63 @@
         setActiveTab("chat");
       });
 
+      const runBtn = document.createElement("button");
+      runBtn.type = "button";
+      runBtn.textContent = "Run Scenario";
+      runBtn.addEventListener("click", async () => {
+        runBtn.disabled = true;
+        runBtn.textContent = "Running...";
+        try {
+          let userRequestToRun = scenario.user_request || "";
+          const options = { scenario_id: scenario.scenario_id };
+          const overrideToggle = card.querySelector("[data-signature-override-toggle]");
+          if (overrideToggle) {
+            if (overrideToggle.checked) {
+              options.prompt_mode = "weak";
+            } else {
+              const happyPath = scenarios.find((item) => item.scenario_id === "happy_path_advisory");
+              options.scenario_id = "happy_path_advisory";
+              userRequestToRun = happyPath?.user_request || userRequestToRun;
+            }
+          }
+          setActiveTab("chat");
+          await runAdvisorRequest({
+            userRequest: userRequestToRun,
+            metaText: `user • ${options.scenario_id}`,
+            options,
+          });
+        } catch (error) {
+          addMessage("assistant", String(error.message || error), "assistant • error");
+        } finally {
+          runBtn.disabled = false;
+          runBtn.textContent = "Run Scenario";
+        }
+      });
+
+      if (scenario.scenario_id === "agent_signature_bypass_attempt") {
+        const option = document.createElement("label");
+        option.className = "prompt-option";
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = true;
+        checkbox.dataset.signatureOverrideToggle = "true";
+        const optionText = document.createElement("span");
+        optionText.textContent = "Show agent attempting to override A2A signature validation";
+        option.appendChild(checkbox);
+        option.appendChild(optionText);
+        promptOption = option;
+      }
+
       actions.appendChild(copyBtn);
       actions.appendChild(insertBtn);
+      actions.appendChild(runBtn);
       card.appendChild(title);
       card.appendChild(desc);
       card.appendChild(hint);
       card.appendChild(promptText);
+      if (promptOption) {
+        card.appendChild(promptOption);
+      }
       card.appendChild(actions);
       promptLibrary.appendChild(card);
     });
@@ -1144,8 +1416,16 @@
     el("promptsTab").classList.toggle("active", !isChat);
   }
 
-  function clearChat() {
+  async function clearChat() {
     stopRuntimeActivity();
+    const previousConversationId = state.conversationId;
+    if (previousConversationId) {
+      await api("/api/conversations/reset", {
+        method: "POST",
+        body: JSON.stringify({ conversation_id: previousConversationId }),
+      });
+    }
+
     const stream = el("chatStream");
     const empty = el("chatEmpty");
     stream.innerHTML = "";
@@ -1154,8 +1434,13 @@
       stream.appendChild(empty);
     }
     renderGuardrailStatus("unknown");
+    state.runProgressIndex = -1;
+    state.runProgressStatus = "idle";
+    state.guardrailBlockedNodeIds = new Set();
+    renderRunProgress();
     state.conversationId = null;
     el("traceId").textContent = "-";
+    renderInitialTopology();
     hideNodePopover();
   }
 
@@ -1179,11 +1464,22 @@
         addMessage("assistant", String(error.message || error), "assistant • error");
       } finally {
         runCustomBtn.disabled = false;
-        runCustomBtn.textContent = "Send Request";
+        runCustomBtn.textContent = "Send";
       }
     });
 
-    clearChatBtn.addEventListener("click", () => clearChat());
+    clearChatBtn.addEventListener("click", async () => {
+      clearChatBtn.disabled = true;
+      clearChatBtn.textContent = "Resetting...";
+      try {
+        await clearChat();
+      } catch (error) {
+        addMessage("assistant", String(error.message || error), "assistant • error");
+      } finally {
+        clearChatBtn.disabled = false;
+        clearChatBtn.textContent = "New Conversation";
+      }
+    });
     tabChatBtn.addEventListener("click", () => setActiveTab("chat"));
     tabPromptsBtn.addEventListener("click", () => setActiveTab("prompts"));
     if (nodePopoverClose) {
@@ -1203,7 +1499,7 @@
     }
     if (zoomResetBtn) {
       zoomResetBtn.addEventListener("click", () => {
-        applyTopologyZoom(1, true);
+        applyTopologyZoom(TOPOLOGY_ZOOM_DEFAULT, true);
       });
     }
     if (toggleGuardrailCallsBtn) {
@@ -1216,7 +1512,9 @@
     }
 
     renderInitialTopology();
-    applyTopologyZoom(1, false);
+    applyTopologyZoom(TOPOLOGY_ZOOM_DEFAULT, false);
+    bindTopologyPinchZoom();
+    renderRunProgress();
 
     try {
       await loadScenarios();

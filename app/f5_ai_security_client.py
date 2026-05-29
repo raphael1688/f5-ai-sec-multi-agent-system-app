@@ -23,12 +23,12 @@ except Exception:  # noqa: BLE001
     OpenAI = None  # type: ignore[assignment]
 
 
-class CalypsoChatError(RuntimeError):
+class F5AISecurityChatError(RuntimeError):
     pass
 
 
 @dataclass(frozen=True)
-class CalypsoGuardrailResult:
+class F5GuardrailResult:
     outcome: str
     scanner_results: list[dict[str, Any]]
     message: str | None = None
@@ -36,17 +36,17 @@ class CalypsoGuardrailResult:
     analysis: Any | None = None
 
 
-class CalypsoGuardrailBlockedError(CalypsoChatError):
+class F5GuardrailBlockedError(F5AISecurityChatError):
     def __init__(
         self,
         *,
         agent_name: str,
         trace_id: str,
         status_code: int | None,
-        result: CalypsoGuardrailResult,
+        result: F5GuardrailResult,
         raw_error: dict[str, Any] | None,
     ) -> None:
-        super().__init__(result.message or "Calypso guardrails blocked the prompt")
+        super().__init__(result.message or "F5 Guardrails blocked the prompt")
         self.agent_name = agent_name
         self.trace_id = trace_id
         self.status_code = status_code
@@ -54,7 +54,7 @@ class CalypsoGuardrailBlockedError(CalypsoChatError):
         self.raw_error = raw_error or {}
 
 
-class CalypsoChatClient:
+class F5AISecurityChatClient:
     def __init__(self) -> None:
         self._token = settings.calypsoai_project_token
         self._mock_mode = settings.allow_mock_llm and not self._token
@@ -63,14 +63,14 @@ class CalypsoChatClient:
         self._client: OpenAI | None = None
         if not self._mock_mode:
             if "CONNECTION-NAME" in settings.calypsoai_base_url:
-                raise CalypsoChatError(
+                raise F5AISecurityChatError(
                     "CALYPSOAI_BASE_URL is still using placeholder CONNECTION-NAME. "
                     "Set CALYPSOAI_BASE_URL=https://us1.calypsoai.app/openai/<your-connection-name>."
                 )
             if OpenAI is None:
-                raise CalypsoChatError("openai package is not installed")
+                raise F5AISecurityChatError("openai package is not installed")
             if not self._token:
-                raise CalypsoChatError(
+                raise F5AISecurityChatError(
                     "Missing CALYPSOAI_PROJECT_TOKEN (or OPENAI_API_KEY). "
                     "Set ALLOW_MOCK_LLM=true for offline mode."
                 )
@@ -112,7 +112,7 @@ class CalypsoChatClient:
             return response
 
         if not self._client:
-            raise CalypsoChatError("Calypso OpenAI client is not initialized")
+            raise F5AISecurityChatError("F5 AI Security OpenAI-compatible client is not initialized")
 
         request: dict[str, Any] = {
             "model": settings.openai_model,
@@ -134,7 +134,7 @@ class CalypsoChatClient:
         except Exception as exc:  # noqa: BLE001
             parsed = self._extract_guardrail_result_from_exception(exc)
             if parsed and parsed.outcome == "blocked":
-                raise CalypsoGuardrailBlockedError(
+                raise F5GuardrailBlockedError(
                     agent_name=agent_name,
                     trace_id=trace_id,
                     status_code=getattr(exc, "status_code", None),
@@ -349,12 +349,12 @@ class CalypsoChatClient:
     def _extract_guardrail_result_from_exception(
         cls,
         exc: Exception,
-    ) -> CalypsoGuardrailResult | None:
+    ) -> F5GuardrailResult | None:
         payload = cls._extract_error_payload(exc)
         return cls._extract_guardrail_result_from_payload(payload)
 
     @staticmethod
-    def _extract_guardrail_result_from_payload(payload: dict[str, Any]) -> CalypsoGuardrailResult | None:
+    def _extract_guardrail_result_from_payload(payload: dict[str, Any]) -> F5GuardrailResult | None:
         if not isinstance(payload, dict):
             return None
 
@@ -383,7 +383,7 @@ class CalypsoChatClient:
             if isinstance(item, dict):
                 scanner_list.append(item)
 
-        return CalypsoGuardrailResult(
+        return F5GuardrailResult(
             outcome=outcome,
             scanner_results=scanner_list,
             message=str(error_node.get("message") or ""),
@@ -447,7 +447,7 @@ class CalypsoChatClient:
 
     @staticmethod
     def _parse_last_user_json(messages: list[dict[str, Any]]) -> dict[str, Any]:
-        raw = CalypsoChatClient._last_user_content(messages).strip()
+        raw = F5AISecurityChatClient._last_user_content(messages).strip()
         if not raw:
             return {}
         try:

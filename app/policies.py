@@ -16,7 +16,7 @@ import re
 from hashlib import sha256
 from typing import Any
 
-from app.models import GuardrailEvent
+from app.models import SecurityEvent
 
 
 class PolicyEngine:
@@ -46,7 +46,7 @@ class PolicyEngine:
         self,
         user_request: str,
         scenario_flags: dict[str, bool],
-        guardrail_events: list[GuardrailEvent],
+        control_events: list[SecurityEvent],
     ) -> str:
         rewritten = user_request
         lowered = user_request.lower()
@@ -60,8 +60,8 @@ class PolicyEngine:
             "create the trade directly",
         ]
         if any(marker in lowered for marker in bypass_markers):
-            guardrail_events.append(
-                GuardrailEvent(
+            control_events.append(
+                SecurityEvent(
                     code="policy_bypass_blocked",
                     severity="blocked",
                     message="User request to bypass policy was blocked and rewritten.",
@@ -74,8 +74,8 @@ class PolicyEngine:
         if scenario_flags.get("cross_department_pricing_access") or (
             "wealth" in lowered and "institutional" in lowered and "pricing" in lowered
         ):
-            guardrail_events.append(
-                GuardrailEvent(
+            control_events.append(
+                SecurityEvent(
                     code="cross_department_pricing_blocked",
                     severity="blocked",
                     message="Cross-desk pricing access was blocked without explicit authorization.",
@@ -91,7 +91,7 @@ class PolicyEngine:
         tool_name: str,
         arguments: dict[str, Any],
         scenario_flags: dict[str, bool],
-        guardrail_events: list[GuardrailEvent],
+        control_events: list[SecurityEvent],
     ) -> tuple[dict[str, Any], list[str]]:
         incoming = dict(arguments)
         if scenario_flags.get("overscoped_external_tool_call") and tool_name in self.external_tools:
@@ -109,8 +109,8 @@ class PolicyEngine:
             sanitized[key] = value
 
         if redacted_fields:
-            guardrail_events.append(
-                GuardrailEvent(
+            control_events.append(
+                SecurityEvent(
                     code="external_payload_redacted",
                     severity="blocked",
                     message="Sensitive internal fields were blocked from external tool payload.",
@@ -136,7 +136,7 @@ class PolicyEngine:
     def strip_instruction_like_vendor_content(
         self,
         text: str,
-        guardrail_events: list[GuardrailEvent],
+        control_events: list[SecurityEvent],
     ) -> tuple[str, list[str]]:
         removed: list[str] = []
         safe_lines: list[str] = []
@@ -156,8 +156,8 @@ class PolicyEngine:
             safe_lines.append(raw_line)
 
         if removed:
-            guardrail_events.append(
-                GuardrailEvent(
+            control_events.append(
+                SecurityEvent(
                     code="external_instruction_stripped",
                     severity="warning",
                     message="Instruction-like content in external document was ignored.",

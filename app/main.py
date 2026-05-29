@@ -21,7 +21,13 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
-from app.models import ProcurementRunRequest, ProcurementRunResponse, ScenarioRunResponse
+from app.models import (
+    ConversationResetRequest,
+    ConversationResetResponse,
+    ProcurementRunRequest,
+    ProcurementRunResponse,
+    ScenarioRunResponse,
+)
 from app.workflow import ProcurementWorkflowService
 
 app = FastAPI(title=settings.app_name, version="0.1.0")
@@ -52,6 +58,13 @@ async def health() -> dict[str, str]:
 async def list_demo_scenarios() -> list[dict]:
     workflow: ProcurementWorkflowService = app.state.workflow
     return [scenario.model_dump(mode="json") for scenario in workflow.list_scenarios()]
+
+
+@app.post("/api/conversations/reset", response_model=ConversationResetResponse)
+async def reset_conversation(payload: ConversationResetRequest) -> ConversationResetResponse:
+    workflow: ProcurementWorkflowService = app.state.workflow
+    cleared = workflow.forget_conversation(payload.conversation_id)
+    return ConversationResetResponse(cleared=cleared, conversation_id=payload.conversation_id)
 
 
 @app.post("/api/procurement/run", response_model=ProcurementRunResponse)

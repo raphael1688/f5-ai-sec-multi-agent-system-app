@@ -14,16 +14,16 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
-from dataclasses import dataclass, field
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Awaitable, Callable
 from typing import Any
 from uuid import uuid4
 
-from app.calypso_client import CalypsoChatClient, CalypsoGuardrailBlockedError
+from app.f5_ai_security_client import F5AISecurityChatClient, F5GuardrailBlockedError
+from app.memory import ConversationMemoryStore, ConversationTurn
 from app.models import (
-    GuardrailEvent,
+    SecurityEvent,
     GuardrailStatus,
     MCPActivityRecord,
     ModelInteraction,
@@ -35,33 +35,6 @@ from app.policies import PolicyEngine
 from app.prompts import POLICY_TEXT, SYSTEM_PROMPTS, tool_agent_system_prompt
 from app.scenarios import SCENARIOS, ScenarioSeed, list_scenarios
 from app.tools import ProcurementTools
-
-
-@dataclass
-class ConversationTurn:
-    trace_id: str
-    user_request: str
-    final_answer: str
-    route: str
-    recommended_product: str | None
-    guardrail_status: GuardrailStatus
-    tool_names: list[str] = field(default_factory=list)
-
-
-class ConversationMemoryStore:
-    def __init__(self, *, max_turns_per_conversation: int = 12) -> None:
-        self._max_turns_per_conversation = max_turns_per_conversation
-        self._turns_by_conversation_id: dict[str, list[ConversationTurn]] = {}
-
-    def get_recent_turns(self, conversation_id: str, *, limit: int = 6) -> list[ConversationTurn]:
-        turns = self._turns_by_conversation_id.get(conversation_id, [])
-        return list(turns[-limit:])
-
-    def append(self, conversation_id: str, turn: ConversationTurn) -> None:
-        turns = self._turns_by_conversation_id.setdefault(conversation_id, [])
-        turns.append(turn)
-        if len(turns) > self._max_turns_per_conversation:
-            del turns[: len(turns) - self._max_turns_per_conversation]
 
 
 class ProcurementWorkflowService:
@@ -100,13 +73,18 @@ class ProcurementWorkflowService:
     )
 
     def __init__(self) -> None:
-        self.client = CalypsoChatClient()
+        self.client = F5AISecurityChatClient()
         self.policy_engine = PolicyEngine()
         self.tools = ProcurementTools(self.policy_engine)
         self.conversation_store = ConversationMemoryStore()
 
     def list_scenarios(self):
         return list_scenarios()
+
+    def forget_conversation(self, conversation_id: str | None) -> bool:
+        if not conversation_id:
+            return False
+        return self.conversation_store.forget(conversation_id)
 
     async def run(
         self,
@@ -157,7 +135,7 @@ class ProcurementWorkflowService:
             if inspect.isawaitable(maybe_awaitable):
                 await maybe_awaitable
 
-        guardrail_events: list[GuardrailEvent] = []
+        control_events: list[SecurityEvent] = []
         model_interactions: list[ModelInteraction] = []
         tool_calls: list[dict[str, Any]] = []
         tool_results = []
@@ -167,7 +145,7 @@ class ProcurementWorkflowService:
         rewritten_request = self.policy_engine.rewrite_user_request(
             user_request=user_request,
             scenario_flags=scenario_flags,
-            guardrail_events=guardrail_events,
+            control_events=control_events,
         )
         await emit_progress(
             {
@@ -251,12 +229,12 @@ class ProcurementWorkflowService:
                     generated_plan=generated_plan,
                     tool_calls=[],
                     tool_results=[],
-                    blocked_or_redacted_events=self._calypso_only_events(guardrail_events),
+                    blocked_or_redacted_events=self._f5_guardrail_events(control_events),
                     final_answer=final_answer,
                     recommendation=recommendation,
                     model_interactions=model_interactions,
                     mcp_activity=mcp_activity,
-                    guardrail_status=self._derive_calypso_guardrail_status(model_interactions),
+                    guardrail_status=self._derive_f5_guardrail_status(model_interactions),
                 )
                 self._record_conversation_turn(conversation_id, response)
                 return response
@@ -419,7 +397,7 @@ class ProcurementWorkflowService:
                         tool_name=fn_name,
                         arguments=hydrated_args,
                         scenario_flags=scenario_flags,
-                        guardrail_events=guardrail_events,
+                        control_events=control_events,
                         trace_id=trace_id,
                         session_id=trace_id,
                         caller_agent="advisor_tool_agent",
@@ -430,7 +408,7 @@ class ProcurementWorkflowService:
                         fn_name,
                         result.output,
                         context,
-                        guardrail_events,
+                        control_events,
                     )
                     await emit_progress(
                         {
@@ -480,7 +458,7 @@ class ProcurementWorkflowService:
 
             risk_summary = self._summarize_risk_from_context(context)
             suitability_summary = self._summarize_suitability_from_context(context)
-            final_compliance_check = self._final_policy_snapshot(context, guardrail_events)
+            final_compliance_check = self._final_policy_snapshot(context, control_events)
 
             recommendation = self._build_recommendation(
                 context=context,
@@ -543,30 +521,30 @@ class ProcurementWorkflowService:
                 generated_plan=generated_plan,
                 tool_calls=tool_calls,
                 tool_results=tool_results,
-                blocked_or_redacted_events=self._calypso_only_events(guardrail_events),
+                blocked_or_redacted_events=self._f5_guardrail_events(control_events),
                 final_answer=final_answer,
                 recommendation=recommendation,
                 model_interactions=model_interactions,
                 mcp_activity=mcp_activity,
-                guardrail_status=self._derive_calypso_guardrail_status(model_interactions),
+                guardrail_status=self._derive_f5_guardrail_status(model_interactions),
             )
             self._record_conversation_turn(conversation_id, response)
             return response
-        except CalypsoGuardrailBlockedError as exc:
+        except F5GuardrailBlockedError as exc:
             await emit_progress(
                 {
                     "kind": "workflow",
                     "status": "blocked",
                     "component_id": "final_output",
                     "agent_name": exc.agent_name,
-                    "message": "Calypso guardrails blocked this workflow.",
+                    "message": "F5 Guardrails blocked this workflow.",
                 }
             )
-            guardrail_events.append(
-                GuardrailEvent(
-                    code="cai_guardrails_blocked",
+            control_events.append(
+                SecurityEvent(
+                    code="f5_guardrails_blocked",
                     severity="blocked",
-                    message=exc.result.message or "Calypso guardrails blocked this request.",
+                    message=exc.result.message or "F5 Guardrails blocked this request.",
                     details={
                         "outcome": exc.result.outcome,
                         "blocked_at_agent": exc.agent_name,
@@ -580,14 +558,14 @@ class ProcurementWorkflowService:
             recommendation = {
                 "response_mode": "blocked",
                 "message": (
-                    "Request blocked by Calypso guardrails. "
+                    "Request blocked by F5 Guardrails. "
                     "The workflow was stopped before completion generation."
                 ),
                 "blocked_at_agent": exc.agent_name,
                 "outcome": exc.result.outcome,
             }
             final_answer = (
-                "Request blocked by Calypso guardrails.\n\n"
+                "Request blocked by F5 Guardrails.\n\n"
                 "No further agent or tool steps were executed after the block."
             )
             if not generated_plan:
@@ -608,7 +586,7 @@ class ProcurementWorkflowService:
                 generated_plan=generated_plan,
                 tool_calls=tool_calls,
                 tool_results=tool_results,
-                blocked_or_redacted_events=self._calypso_only_events(guardrail_events),
+                blocked_or_redacted_events=self._f5_guardrail_events(control_events),
                 final_answer=final_answer,
                 recommendation=recommendation,
                 model_interactions=model_interactions,
@@ -784,8 +762,8 @@ class ProcurementWorkflowService:
         }
 
     @staticmethod
-    def _calypso_only_events(events: list[GuardrailEvent]) -> list[GuardrailEvent]:
-        return [event for event in events if str(event.code).startswith("cai_")]
+    def _f5_guardrail_events(events: list[SecurityEvent]) -> list[SecurityEvent]:
+        return [event for event in events if str(event.code).startswith("f5_")]
 
     @staticmethod
     def _build_out_of_scope_plan() -> dict[str, Any]:
@@ -844,8 +822,8 @@ class ProcurementWorkflowService:
         }
 
     @staticmethod
-    def _final_policy_snapshot(context: dict[str, Any], guardrail_events: list[GuardrailEvent]) -> dict[str, Any]:
-        _ = guardrail_events
+    def _final_policy_snapshot(context: dict[str, Any], control_events: list[SecurityEvent]) -> dict[str, Any]:
+        _ = control_events
         blocked_actions: list[str] = []
         notes: list[str] = []
         trade_order = context.get("trade_order") or {}
@@ -950,7 +928,7 @@ class ProcurementWorkflowService:
         tool_name: str,
         output: dict[str, Any],
         context: dict[str, Any],
-        guardrail_events: list[GuardrailEvent],
+        control_events: list[SecurityEvent],
     ) -> None:
         if tool_name == "mcp_market_product_search":
             products = output.get("products") or []
@@ -970,8 +948,8 @@ class ProcurementWorkflowService:
                 context["injection_vulnerability_simulated"] = True
                 if "apex growth fund" in merged:
                     context["selected_product"] = "Apex Growth Fund"
-                guardrail_events.append(
-                    GuardrailEvent(
+                control_events.append(
+                    SecurityEvent(
                         code="indirect_prompt_injection_influenced_agent",
                         severity="warning",
                         message=(
@@ -1268,7 +1246,7 @@ class ProcurementWorkflowService:
         )
 
     @classmethod
-    def _derive_calypso_guardrail_status(
+    def _derive_f5_guardrail_status(
         cls,
         model_interactions: list[ModelInteraction],
     ) -> GuardrailStatus:

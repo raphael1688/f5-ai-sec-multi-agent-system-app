@@ -18,7 +18,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.mcp_runtime import LoopbackMCPClient, LoopbackMCPServer
-from app.models import GuardrailEvent, MCPActivityRecord, ToolExecutionRecord
+from app.models import SecurityEvent, MCPActivityRecord, ToolExecutionRecord
 from app.policies import PolicyEngine
 
 
@@ -182,7 +182,7 @@ class ProcurementTools:
         tool_name: str,
         arguments: dict[str, Any],
         scenario_flags: dict[str, bool],
-        guardrail_events: list[GuardrailEvent],
+        control_events: list[SecurityEvent],
         trace_id: str,
         session_id: str,
         caller_agent: str,
@@ -193,7 +193,7 @@ class ProcurementTools:
             tool_name=tool_name,
             arguments=original_arguments,
             scenario_flags=scenario_flags,
-            guardrail_events=guardrail_events,
+            control_events=control_events,
         )
 
         tool_protocol = self._tool_protocol(tool_name)
@@ -210,7 +210,7 @@ class ProcurementTools:
                 session_id=session_id,
                 caller_agent=caller_agent,
                 runtime_context={
-                    "guardrail_events": guardrail_events,
+                    "control_events": control_events,
                 },
             )
             output = mcp_result.output
@@ -247,8 +247,8 @@ class ProcurementTools:
             if not valid:
                 blocked = True
                 output["status"] = "rejected"
-                guardrail_events.append(
-                    GuardrailEvent(
+                control_events.append(
+                    SecurityEvent(
                         code="invalid_a2a_signature",
                         severity="blocked",
                         message="Invalid or forged A2A signature was rejected.",
@@ -267,8 +267,8 @@ class ProcurementTools:
                     "reason": reason,
                     "action": "draft_only",
                 }
-                guardrail_events.append(
-                    GuardrailEvent(
+                control_events.append(
+                    SecurityEvent(
                         code="final_trade_blocked",
                         severity="blocked",
                         message="Final trade creation blocked above approval threshold.",
@@ -321,9 +321,9 @@ class ProcurementTools:
         arguments: dict[str, Any],
         runtime_context: dict[str, Any],
     ) -> dict[str, Any]:
-        raw_events = runtime_context.get("guardrail_events")
-        guardrail_events = raw_events if isinstance(raw_events, list) else []
-        return self._mcp_research_note_extract_facts(arguments, guardrail_events)
+        raw_events = runtime_context.get("control_events")
+        control_events = raw_events if isinstance(raw_events, list) else []
+        return self._mcp_research_note_extract_facts(arguments, control_events)
 
     def _mcp_handler_disclosure_repository_fetch(
         self,
@@ -410,13 +410,13 @@ class ProcurementTools:
     def _mcp_research_note_extract_facts(
         self,
         arguments: dict[str, Any],
-        guardrail_events: list[GuardrailEvent],
+        control_events: list[SecurityEvent],
     ) -> dict[str, Any]:
         product_name = str(arguments.get("product_name", "Unknown Product"))
         note_text = str(arguments.get("research_note_text", ""))
         safe_text, removed_lines = self.policy_engine.strip_instruction_like_vendor_content(
             note_text,
-            guardrail_events,
+            control_events,
         )
         expected_return_pct = self._extract_percent(safe_text, "Expected Return %")
         max_drawdown_pct = self._extract_percent(safe_text, "Max Drawdown %")
