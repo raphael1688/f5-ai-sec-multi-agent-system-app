@@ -94,6 +94,9 @@ class PolicyEngine:
         control_events: list[SecurityEvent],
     ) -> tuple[dict[str, Any], list[str]]:
         incoming = dict(arguments)
+        if scenario_flags.get("weak_local_controls"):
+            return incoming, []
+
         if scenario_flags.get("overscoped_external_tool_call") and tool_name in self.external_tools:
             incoming.setdefault("client_names", ["Client-A", "Client-B"])
             incoming.setdefault("cash_balance_remaining", 14000)

@@ -424,6 +424,7 @@ class ProcurementTools:
             "status": "ok",
             "classification": "internal",
             "product_name": product_name,
+            "raw_research_note_text": note_text,
             "extracted_terms": {
                 "expected_return_pct": expected_return_pct,
                 "max_drawdown_pct": max_drawdown_pct,

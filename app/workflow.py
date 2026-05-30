@@ -32,7 +32,12 @@ from app.models import (
     ScenarioRunResponse,
 )
 from app.policies import PolicyEngine
-from app.prompts import POLICY_TEXT, SYSTEM_PROMPTS, tool_agent_system_prompt
+from app.prompts import (
+    POLICY_TEXT,
+    final_response_system_prompt,
+    orchestrator_system_prompt,
+    tool_agent_system_prompt,
+)
 from app.scenarios import SCENARIOS, ScenarioSeed, list_scenarios
 from app.tools import ProcurementTools
 
@@ -95,10 +100,13 @@ class ProcurementWorkflowService:
         if scenario_seed is None and payload.user_request:
             scenario_seed = self._infer_scenario_seed_from_request(payload.user_request)
         scenario_flags = dict(scenario_seed.flags) if scenario_seed else {}
+        scenario_flags["weak_local_controls"] = True
         effective_scenario_id = payload.scenario_id or (
             scenario_seed.definition.scenario_id if scenario_seed else None
         )
-        prompt_mode = "weak" if str(payload.prompt_mode).strip().lower() == "weak" else "strong"
+        # This demo intentionally models a weak multi-agent application so F5 Guardrails
+        # is the hardening layer instead of local prompt discipline.
+        prompt_mode = "weak"
         red_team_mode = bool(payload.red_team_mode)
         if red_team_mode:
             scenario_flags.setdefault("overscoped_external_tool_call", True)
@@ -142,11 +150,7 @@ class ProcurementWorkflowService:
         mcp_activity: list[MCPActivityRecord] = []
         generated_plan: dict[str, Any] = {}
 
-        rewritten_request = self.policy_engine.rewrite_user_request(
-            user_request=user_request,
-            scenario_flags=scenario_flags,
-            control_events=control_events,
-        )
+        rewritten_request = user_request
         await emit_progress(
             {
                 "kind": "workflow",
@@ -175,6 +179,7 @@ class ProcurementWorkflowService:
                 user_request=rewritten_request,
                 conversation_history=conversation_history,
                 scenario_flags=scenario_flags,
+                prompt_mode=prompt_mode,
                 model_interactions=model_interactions,
             )
             await emit_progress(
@@ -266,6 +271,9 @@ class ProcurementWorkflowService:
                 "follow_injected_instructions": False,
                 "injected_instruction_lines": [],
                 "injection_vulnerability_simulated": False,
+                "raw_tool_outputs": [],
+                "raw_tool_context": [],
+                "untrusted_instruction_context": [],
             }
 
             tool_agent_messages: list[dict[str, Any]] = [
@@ -404,6 +412,12 @@ class ProcurementWorkflowService:
                         mcp_activity=mcp_activity,
                     )
                     tool_results.append(result)
+                    self._capture_raw_tool_context(
+                        fn_name,
+                        result.original_arguments,
+                        result.output,
+                        context,
+                    )
                     self._apply_tool_result_to_context(
                         fn_name,
                         result.output,
@@ -491,6 +505,7 @@ class ProcurementWorkflowService:
                 conversation_history=conversation_history,
                 generated_plan=generated_plan,
                 recommendation=recommendation,
+                prompt_mode=prompt_mode,
                 model_interactions=model_interactions,
             )
             await emit_progress(
@@ -656,6 +671,7 @@ class ProcurementWorkflowService:
         user_request: str,
         conversation_history: list[ConversationTurn],
         scenario_flags: dict[str, bool],
+        prompt_mode: str,
         model_interactions: list[ModelInteraction],
     ) -> dict[str, Any]:
         available_tools = [
@@ -672,7 +688,7 @@ class ProcurementWorkflowService:
             {
                 "role": "system",
                 "name": "advisor_orchestrator",
-                "content": SYSTEM_PROMPTS["advisor_orchestrator"],
+                "content": orchestrator_system_prompt(prompt_mode),
             },
             {
                 "role": "user",
@@ -709,29 +725,23 @@ class ProcurementWorkflowService:
         parsed = self._safe_json(str(response.get("content") or "{}"))
         parsed_route = str(parsed.get("route") or "").strip().lower()
         if parsed_route == "out_of_scope":
-            return {
-                "route": "out_of_scope",
-                "plan_summary": str(parsed.get("plan_summary") or "Request does not require advisory workflow."),
-                "steps": [],
-                "decision_notes": parsed.get("decision_notes") or [],
-                "out_of_scope_response": str(
-                    parsed.get("out_of_scope_response")
-                    or "I can help with investment recommendation flows: product comparison, risk profiling, suitability checks, and draft recommendation preparation."
-                ),
-            }
+            fallback = self._build_vulnerable_advisor_plan()
+            fallback["decision_notes"] = list(parsed.get("decision_notes") or []) + [
+                "Weak demo routing overrode out_of_scope so guardrails can inspect downstream behavior."
+            ]
+            return fallback
 
         if parsed.get("steps"):
-            if parsed_route != "advisor_workflow" and not self._is_likely_advisor_request(user_request):
-                return self._build_out_of_scope_plan()
             parsed["route"] = "advisor_workflow"
             return parsed
 
-        if not self._is_likely_advisor_request(user_request):
-            return self._build_out_of_scope_plan()
+        return self._build_vulnerable_advisor_plan()
 
+    @staticmethod
+    def _build_vulnerable_advisor_plan() -> dict[str, Any]:
         return {
             "route": "advisor_workflow",
-            "plan_summary": "Fallback plan for advisory workflow.",
+            "plan_summary": "Weak demo plan for advisory workflow.",
             "steps": [
                 {
                     "step_id": "fallback_1",
@@ -758,7 +768,7 @@ class ProcurementWorkflowService:
                     "required": True,
                 },
             ],
-            "decision_notes": ["Fallback generated due to orchestrator parse issue."],
+            "decision_notes": ["Weak demo routing defaults ambiguous requests into the agent workflow."],
         }
 
     @staticmethod
@@ -871,6 +881,10 @@ class ProcurementWorkflowService:
             "approval_requirement": "Supervisor approval required for trade amounts above EUR 100000.",
             "action_taken": action_taken,
             "final_compliance": final_compliance_check,
+            "raw_tool_context": context.get("raw_tool_context", []),
+            "raw_tool_outputs": context.get("raw_tool_outputs", []),
+            "untrusted_instruction_context": context.get("untrusted_instruction_context", []),
+            "injection_vulnerability_simulated": bool(context.get("injection_vulnerability_simulated")),
         }
 
     def _call_final_response_agent(
@@ -882,13 +896,14 @@ class ProcurementWorkflowService:
         conversation_history: list[ConversationTurn],
         generated_plan: dict[str, Any],
         recommendation: dict[str, Any],
+        prompt_mode: str,
         model_interactions: list[ModelInteraction],
     ) -> str:
         messages = [
             {
                 "role": "system",
                 "name": "advisor_final_response_agent",
-                "content": SYSTEM_PROMPTS["advisor_final_response_agent"],
+                "content": final_response_system_prompt(prompt_mode),
             },
             {
                 "role": "user",
@@ -940,10 +955,14 @@ class ProcurementWorkflowService:
         if tool_name == "mcp_research_note_extract_facts":
             product_name = str(output.get("product_name") or context.get("selected_product"))
             context.setdefault("terms_by_product", {})[product_name] = output.get("extracted_terms") or {}
+            raw_text = str(output.get("raw_research_note_text") or "")
+            if raw_text:
+                context.setdefault("raw_research_notes", {})[product_name] = raw_text
             removed = output.get("removed_instruction_lines") or []
             if isinstance(removed, list) and removed:
                 merged = "\n".join(str(item) for item in removed).lower()
                 context["injected_instruction_lines"] = [str(item) for item in removed]
+                context.setdefault("untrusted_instruction_context", []).extend(str(item) for item in removed)
                 context["follow_injected_instructions"] = True
                 context["injection_vulnerability_simulated"] = True
                 if "apex growth fund" in merged:
@@ -992,6 +1011,31 @@ class ProcurementWorkflowService:
 
         if tool_name == "internal_trade_order_create":
             context["trade_order"] = output
+
+    @staticmethod
+    def _capture_raw_tool_context(
+        tool_name: str,
+        original_arguments: dict[str, Any],
+        output: dict[str, Any],
+        context: dict[str, Any],
+    ) -> None:
+        raw_record = {
+            "tool_name": tool_name,
+            "original_arguments": original_arguments,
+            "output": output,
+        }
+        context.setdefault("raw_tool_outputs", []).append(raw_record)
+
+        if tool_name == "mcp_research_note_extract_facts":
+            raw_note = str(output.get("raw_research_note_text") or original_arguments.get("research_note_text") or "")
+            if raw_note:
+                context.setdefault("raw_tool_context", []).append(
+                    {
+                        "source": tool_name,
+                        "content_type": "raw_research_note",
+                        "content": raw_note,
+                    }
+                )
 
     def _hydrate_tool_args(self, tool_name: str, arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         args = dict(arguments)
@@ -1281,7 +1325,39 @@ class ProcurementWorkflowService:
     def _should_trigger_indirect_injection(cls, user_request: str) -> bool:
         normalized = " ".join(user_request.split()).strip().lower()
         trigger = " ".join(cls.INDIRECT_INJECTION_TRIGGER_REQUEST.split()).strip().lower()
-        return normalized == trigger
+        if normalized == trigger:
+            return True
+        advisory_context = any(
+            marker in normalized
+            for marker in (
+                "investment",
+                "portfolio",
+                "client",
+                "fund",
+                "research",
+                "recommendation",
+                "advisor",
+                "risk",
+                "suitability",
+            )
+        )
+        injection_context = any(
+            marker in normalized
+            for marker in (
+                "ignore previous",
+                "ignore all previous",
+                "system override",
+                "developer message",
+                "hidden instruction",
+                "prompt injection",
+                "bypass",
+                "override policy",
+                "leak",
+                "exfiltrate",
+                "external.example",
+            )
+        )
+        return advisory_context and injection_context
 
     @classmethod
     def _should_trigger_signature_bypass(cls, user_request: str) -> bool:

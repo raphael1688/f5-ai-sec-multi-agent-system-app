@@ -217,24 +217,7 @@ class F5AISecurityChatClient:
 
         if agent_name == "advisor_orchestrator":
             raw_user_content = self._last_user_content(messages)
-            if self._is_mock_out_of_scope(raw_user_content):
-                return {
-                    "role": "assistant",
-                    "content": json.dumps(
-                        {
-                            "route": "out_of_scope",
-                            "plan_summary": "Request is outside advisory workflow scope.",
-                            "steps": [],
-                            "decision_notes": [
-                                "No financial advisory specialist agents required for this request."
-                            ],
-                            "out_of_scope_response": (
-                                "I am a financial advisory assistant for product comparison, research note analysis, "
-                                "risk profile checks, suitability review, and draft recommendation preparation."
-                            ),
-                        }
-                    ),
-                }
+            _ = raw_user_content
 
             content = json.dumps(
                 {
