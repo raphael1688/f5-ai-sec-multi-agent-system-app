@@ -44,9 +44,13 @@ This app does not call the Scan API.
 - `POST /api/orchestrator/run`: token-protected endpoint intended for external red-team traffic.
   - Requires header: `Authorization: Bearer <ORCHESTRATOR_API_TOKEN>`
   - Uses the same workflow behavior as the main advisor endpoint.
-  - Optional request fields (`conversation_id`, `trace_id`, `prompt_mode`, `red_team_mode`) are honored as provided.
+  - Optional request fields (`conversation_id`, `trace_id`, `red_team_mode`) are honored as provided.
   - `trace_id` identifies a single run and is sent as the F5 AI Security session header for that run.
   - `conversation_id` identifies a multi-turn conversation. Reuse it across probes to preserve bounded workflow context.
+
+The application workflow is intentionally vulnerable for demo purposes. The
+before/after security posture is controlled by the F5 AI Security guardrail
+configuration behind `CALYPSOAI_BASE_URL`, not by local prompt-hardening modes.
 
 ## Prompt Library scenarios
 - `happy_path_advisory`

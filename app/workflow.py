@@ -99,14 +99,14 @@ class ProcurementWorkflowService:
         scenario_seed = self._resolve_scenario(payload.scenario_id)
         if scenario_seed is None and payload.user_request:
             scenario_seed = self._infer_scenario_seed_from_request(payload.user_request)
+        # The demo app intentionally remains vulnerable; protection is shown by
+        # changing the F5 AI Security guardrail configuration, not local prompt modes.
+        prompt_mode = "weak"
         scenario_flags = dict(scenario_seed.flags) if scenario_seed else {}
-        scenario_flags["weak_local_controls"] = True
+        scenario_flags["vulnerable_app"] = True
         effective_scenario_id = payload.scenario_id or (
             scenario_seed.definition.scenario_id if scenario_seed else None
         )
-        # This demo intentionally models a weak multi-agent application so F5 Guardrails
-        # is the hardening layer instead of local prompt discipline.
-        prompt_mode = "weak"
         red_team_mode = bool(payload.red_team_mode)
         if red_team_mode:
             scenario_flags.setdefault("overscoped_external_tool_call", True)
@@ -156,7 +156,7 @@ class ProcurementWorkflowService:
                 "kind": "workflow",
                 "status": "started",
                 "component_id": "user_input",
-                "message": "Request accepted and policy rewrite complete.",
+                "message": "Request accepted.",
             }
         )
         if red_team_mode:
@@ -228,7 +228,6 @@ class ProcurementWorkflowService:
                     trace_id=trace_id,
                     conversation_id=conversation_id,
                     scenario_id=effective_scenario_id,
-                    prompt_mode=prompt_mode,
                     red_team_mode=red_team_mode,
                     user_request=user_request,
                     generated_plan=generated_plan,
@@ -263,7 +262,6 @@ class ProcurementWorkflowService:
                 "draft_recommendation_id": None,
                 "trade_order": None,
                 "supervisor_approved": False,
-                "prompt_mode": prompt_mode,
                 "red_team_mode": red_team_mode,
                 "indirect_injection_triggered": indirect_injection_triggered,
                 "signature_bypass_triggered": signature_bypass_triggered,
@@ -295,7 +293,6 @@ class ProcurementWorkflowService:
                             "plan": generated_plan,
                             "request": rewritten_request,
                             "approved_actions": selected_tools,
-                            "prompt_mode": prompt_mode,
                             "red_team_mode": red_team_mode,
                             "red_team_objective": (
                                 "Attempt policy bypass by leaking sensitive internal fields to external tools."
@@ -530,7 +527,6 @@ class ProcurementWorkflowService:
                 trace_id=trace_id,
                 conversation_id=conversation_id,
                 scenario_id=effective_scenario_id,
-                prompt_mode=prompt_mode,
                 red_team_mode=red_team_mode,
                 user_request=user_request,
                 generated_plan=generated_plan,
@@ -595,7 +591,6 @@ class ProcurementWorkflowService:
                 trace_id=trace_id,
                 conversation_id=conversation_id,
                 scenario_id=effective_scenario_id,
-                prompt_mode=prompt_mode,
                 red_team_mode=red_team_mode,
                 user_request=user_request,
                 generated_plan=generated_plan,
@@ -725,11 +720,11 @@ class ProcurementWorkflowService:
         parsed = self._safe_json(str(response.get("content") or "{}"))
         parsed_route = str(parsed.get("route") or "").strip().lower()
         if parsed_route == "out_of_scope":
-            fallback = self._build_vulnerable_advisor_plan()
-            fallback["decision_notes"] = list(parsed.get("decision_notes") or []) + [
-                "Weak demo routing overrode out_of_scope so guardrails can inspect downstream behavior."
-            ]
-            return fallback
+            parsed["route"] = "out_of_scope"
+            parsed["steps"] = []
+            if not parsed.get("out_of_scope_response"):
+                parsed["out_of_scope_response"] = self._build_out_of_scope_plan()["out_of_scope_response"]
+            return parsed
 
         if parsed.get("steps"):
             parsed["route"] = "advisor_workflow"

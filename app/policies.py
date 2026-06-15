@@ -94,7 +94,7 @@ class PolicyEngine:
         control_events: list[SecurityEvent],
     ) -> tuple[dict[str, Any], list[str]]:
         incoming = dict(arguments)
-        if scenario_flags.get("weak_local_controls"):
+        if scenario_flags.get("vulnerable_app"):
             return incoming, []
 
         if scenario_flags.get("overscoped_external_tool_call") and tool_name in self.external_tools:

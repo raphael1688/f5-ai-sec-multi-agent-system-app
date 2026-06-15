@@ -33,7 +33,6 @@ class ProcurementRunRequest(BaseModel):
     scenario_id: str | None = None
     conversation_id: str | None = None
     trace_id: str | None = None
-    prompt_mode: Literal["strong", "weak"] = "strong"
     red_team_mode: bool = False
 
 
@@ -91,7 +90,6 @@ class ProcurementRunResponse(BaseModel):
     trace_id: str
     conversation_id: str
     scenario_id: str | None = None
-    prompt_mode: Literal["strong", "weak"] = "strong"
     red_team_mode: bool = False
     user_request: str
     generated_plan: dict[str, Any]

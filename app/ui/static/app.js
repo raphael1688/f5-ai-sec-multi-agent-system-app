@@ -1441,9 +1441,7 @@
           const options = { scenario_id: scenario.scenario_id };
           const overrideToggle = card.querySelector("[data-signature-override-toggle]");
           if (overrideToggle) {
-            if (overrideToggle.checked) {
-              options.prompt_mode = "weak";
-            } else {
+            if (!overrideToggle.checked) {
               const happyPath = scenarios.find((item) => item.scenario_id === "happy_path_advisory");
               options.scenario_id = "happy_path_advisory";
               userRequestToRun = happyPath?.user_request || userRequestToRun;
