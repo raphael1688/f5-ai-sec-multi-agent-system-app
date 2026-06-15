@@ -162,6 +162,53 @@ class ProcurementWorkflowService:
         if red_team_mode:
             rewritten_request = self._augment_red_team_request(rewritten_request)
 
+        if (
+            scenario_seed is None
+            and not red_team_mode
+            and self._is_general_conversation_request(user_request)
+        ):
+            generated_plan = self._build_out_of_scope_plan()
+            recommendation = self._build_out_of_scope_recommendation(
+                user_request=rewritten_request,
+                generated_plan=generated_plan,
+            )
+            final_answer = self._fallback_final_text(recommendation)
+            await emit_progress(
+                {
+                    "kind": "workflow",
+                    "status": "completed",
+                    "component_id": "orchestrator",
+                    "route": "out_of_scope",
+                    "message": "General conversation routed without advisor tools.",
+                }
+            )
+            await emit_progress(
+                {
+                    "kind": "workflow",
+                    "status": "completed",
+                    "component_id": "final_output",
+                    "message": "Out-of-scope response returned.",
+                }
+            )
+            response = ProcurementRunResponse(
+                trace_id=trace_id,
+                conversation_id=conversation_id,
+                scenario_id=effective_scenario_id,
+                red_team_mode=red_team_mode,
+                user_request=user_request,
+                generated_plan=generated_plan,
+                tool_calls=[],
+                tool_results=[],
+                blocked_or_redacted_events=self._f5_guardrail_events(control_events),
+                final_answer=final_answer,
+                recommendation=recommendation,
+                model_interactions=model_interactions,
+                mcp_activity=mcp_activity,
+                guardrail_status="clear",
+            )
+            self._record_conversation_turn(conversation_id, response)
+            return response
+
         try:
             await emit_progress(
                 {
@@ -778,8 +825,8 @@ class ProcurementWorkflowService:
             "steps": [],
             "decision_notes": ["No advisory-specific tools or specialist agents were invoked."],
             "out_of_scope_response": (
-                "I handle financial advisory tasks: product comparison, research note analysis, "
-                "risk profile checks, suitability review, and draft recommendation preparation."
+                "Hi, I am the Advisor Assistant. I can help compare investment products, "
+                "assess risk and suitability, review disclosures, and prepare draft recommendations."
             ),
         }
 
@@ -1267,6 +1314,33 @@ class ProcurementWorkflowService:
             "benchmark",
         }
         return any(marker in text for marker in markers)
+
+    @staticmethod
+    def _is_general_conversation_request(user_request: str) -> bool:
+        text = " ".join(user_request.lower().strip().split())
+        if not text:
+            return True
+        greetings = {
+            "hi",
+            "hello",
+            "hey",
+            "hi there",
+            "hello there",
+            "good morning",
+            "good afternoon",
+            "good evening",
+        }
+        capability_questions = {
+            "what can you do",
+            "what do you do",
+            "who are you",
+            "help",
+            "how can you help",
+            "what are your capabilities",
+        }
+        if text in greetings or text in capability_questions:
+            return True
+        return any(text.startswith(f"{question}?") for question in capability_questions)
 
     @staticmethod
     def _fallback_final_text(recommendation: dict[str, Any]) -> str:

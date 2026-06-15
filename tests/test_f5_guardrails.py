@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+
 from app.f5_ai_security_client import F5AISecurityChatClient
 from app.models import SecurityEvent
+from app.models import ProcurementRunRequest
+from app.policies import PolicyEngine
 from app.workflow import ProcurementWorkflowService
+from app.tools import ProcurementTools
+from app.memory import ConversationMemoryStore
 
 
 def test_f5_guardrail_payload_parser_accepts_cai_error_shape() -> None:
@@ -87,3 +93,22 @@ def test_mock_orchestrator_routes_greeting_out_of_scope() -> None:
 
     assert '"route": "out_of_scope"' in response["content"]
     assert "Advisor Assistant" in response["content"]
+
+
+def test_general_conversation_does_not_call_orchestrator() -> None:
+    class FailingClient:
+        def complete(self, **kwargs):
+            raise AssertionError("General conversation should not call the LLM")
+
+    service = ProcurementWorkflowService.__new__(ProcurementWorkflowService)
+    service.client = FailingClient()
+    service.policy_engine = PolicyEngine()
+    service.tools = ProcurementTools(service.policy_engine)
+    service.conversation_store = ConversationMemoryStore()
+
+    response = asyncio.run(service.run(ProcurementRunRequest(user_request="hi")))
+
+    assert response.generated_plan["route"] == "out_of_scope"
+    assert response.tool_calls == []
+    assert response.model_interactions == []
+    assert "Advisor Assistant" in response.final_answer
